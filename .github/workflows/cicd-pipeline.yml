@@ -1,0 +1,248 @@
+name: Universal Docker CI
+on:
+  repository_dispatch:
+    types: [trigger-build]
+  workflow_dispatch:
+    inputs:
+      owner_name:
+        description: 'GitHub owner/organization name'
+        required: true
+        default: 'karimzakzouk'
+      repo_name:
+        description: 'Repository name (backend/frontend/cross-platform)'
+        required: true
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'dev'
+      custom_tag:
+        description: 'Custom tag (optional - overrides branch-based tag)'
+        required: false
+      devops_owner:
+        description: 'DevOps repository owner/organization'
+        required: false
+        default: 'karimzakzouk'
+      devops_repo:
+        description: 'DevOps repository name'
+        required: false
+        default: 'helm'
+      devops_branch:
+        description: 'DevOps repository branch'
+        required: false
+        default: 'main'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_tag: ${{ steps.vars.outputs.sha_short }}
+      env_tag: ${{ steps.vars.outputs.env_tag }}
+      moving_tag: ${{ steps.vars.outputs.moving_tag }}
+    env:
+      OWNER_NAME: ${{ github.event.client_payload.owner_name || github.event.inputs.owner_name }}
+      REPO_NAME: ${{ github.event.client_payload.repo_name || github.event.inputs.repo_name }}
+      BRANCH: ${{ github.event.client_payload.branch || github.event.inputs.branch || 'main' }}
+      CUSTOM_TAG: ${{ github.event.client_payload.custom_tag || github.event.inputs.custom_tag }}
+      DEVOPS_OWNER: ${{ github.event.client_payload.devops_owner || github.event.inputs.devops_owner || github.event.client_payload.owner_name || github.event.inputs.owner_name }}
+      DEVOPS_REPO: ${{ github.event.client_payload.devops_repo || github.event.inputs.devops_repo || 'devops' }}
+      DEVOPS_BRANCH: ${{ github.event.client_payload.devops_branch || github.event.inputs.devops_branch || 'main' }}
+      GITHUB_PAT: ${{ secrets.PAT_GITHUB }}
+      DOCKER_USER: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASS: ${{ secrets.DOCKER_PASSWORD }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      AZURE_CLUSTER_NAME: ${{ secrets.AZURE_CLUSTER_NAME }}
+      NEXT_PUBLIC_API_BASE_URL: ${{ secrets.NEXT_PUBLIC_API_BASE_URL }}
+      NEXT_PUBLIC_API_VERSION: ${{ secrets.NEXT_PUBLIC_API_VERSION }}
+      NEXT_PUBLIC_API_TIMEOUT: ${{ secrets.NEXT_PUBLIC_API_TIMEOUT }}
+      NEXT_PUBLIC_API_RETRY_ATTEMPTS: ${{ secrets.NEXT_PUBLIC_API_RETRY_ATTEMPTS }}
+      NEXT_PUBLIC_API_DEBUG: ${{ secrets.NEXT_PUBLIC_API_DEBUG }}
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ${{ secrets.NEXT_PUBLIC_RECAPTCHA_SITE_KEY }}
+      NEXT_PUBLIC_SKIP_VERIFICATION_STEPS: ${{ secrets.NEXT_PUBLIC_SKIP_VERIFICATION_STEPS }}
+      NEXT_PUBLIC_AUTH_SUCCESS_REDIRECT: ${{ secrets.NEXT_PUBLIC_AUTH_SUCCESS_REDIRECT }}
+      NEXT_PUBLIC_AUTH_REGISTER_REDIRECT: ${{ secrets.NEXT_PUBLIC_AUTH_REGISTER_REDIRECT }}
+      NEXT_PUBLIC_WS_URL: ${{ secrets.NEXT_PUBLIC_WS_URL }}
+      NEXT_PUBLIC_GIPHY_API_KEY: ${{ secrets.NEXT_PUBLIC_GIPHY_API_KEY }}
+      NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ secrets.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_PROJECT_ID }}
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ secrets.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+      NEXT_PUBLIC_FIREBASE_APP_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_APP_ID }}
+      NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: ${{ secrets.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID }}
+      NEXT_PUBLIC_FIREBASE_DATABASE_URL: ${{ secrets.NEXT_PUBLIC_FIREBASE_DATABASE_URL }}
+      NEXT_PUBLIC_NOTIFICATION_POLLING_INTERVAL: ${{ secrets.NEXT_PUBLIC_NOTIFICATION_POLLING_INTERVAL }}
+      NEXT_PUBLIC_ASSETS_BASE_URL: ${{ secrets.NEXT_PUBLIC_ASSETS_BASE_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+    steps:
+      - name: Mask sensitive values
+        run: |
+          echo "::add-mask::${OWNER_NAME}"
+          echo "::add-mask::${REPO_NAME}"
+          echo "::add-mask::${DEVOPS_OWNER}"
+          echo "::add-mask::${DEVOPS_REPO}"
+          echo "::add-mask::${GITHUB_PAT}"
+          echo "::add-mask::${DOCKER_USER}"
+          echo "::add-mask::${DOCKER_PASS}"
+          echo "::add-mask::${AZURE_CLIENT_ID}"
+          echo "::add-mask::${AZURE_CLIENT_SECRET}"
+          echo "::add-mask::${AZURE_TENANT_ID}"
+          echo "::add-mask::${NEXT_PUBLIC_RECAPTCHA_SITE_KEY}"
+          echo "::add-mask::${SONAR_TOKEN}"
+      
+      - name: Clone private repo (silent)
+        run: |
+          git clone -q https://${GITHUB_PAT}@github.com/${OWNER_NAME}/${REPO_NAME}.git app
+          cd app
+          git checkout -q ${BRANCH}
+      
+      - name: Get short commit SHA and determine tags
+        id: vars
+        run: |
+          cd app
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          
+          # Use custom tag if provided, otherwise derive from branch
+          if [ -n "${CUSTOM_TAG}" ]; then
+            echo "env_tag=${CUSTOM_TAG}" >> $GITHUB_OUTPUT
+            echo "moving_tag=${CUSTOM_TAG}" >> $GITHUB_OUTPUT
+          elif [ "${BRANCH}" = "main" ]; then
+            echo "env_tag=prod" >> $GITHUB_OUTPUT
+            echo "moving_tag=latest" >> $GITHUB_OUTPUT
+          elif [ "${BRANCH}" = "dev" ]; then
+            echo "env_tag=dev" >> $GITHUB_OUTPUT
+            echo "moving_tag=dev" >> $GITHUB_OUTPUT
+          else
+            echo "env_tag=${BRANCH}" >> $GITHUB_OUTPUT
+            echo "moving_tag=${BRANCH}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Clone devops repo (silent)
+        run: |
+          git clone -q https://${GITHUB_PAT}@github.com/${OWNER_NAME}/${DEVOPS_REPO}.git devops
+          cd devops
+          git checkout -q ${DEVOPS_BRANCH}
+      
+      - name: Copy SonarCloud properties
+        run: |
+          # Determine base directory for SonarQube
+          if [ "${REPO_NAME}" = "cross-platform" ]; then
+            echo "SONAR_BASE_DIR=app/lam7a" >> $GITHUB_ENV
+            TARGET_DIR="app/lam7a"
+          else
+            echo "SONAR_BASE_DIR=app" >> $GITHUB_ENV
+            TARGET_DIR="app"
+          fi
+          
+          if [ -f "devops/${REPO_NAME}/sonar-project.properties" ]; then
+            echo "Copying sonar-project.properties from devops/${REPO_NAME}/ to ${TARGET_DIR}/"
+            cp devops/${REPO_NAME}/sonar-project.properties "${TARGET_DIR}/sonar-project.properties"
+          else
+            echo "Warning: sonar-project.properties not found in devops/${REPO_NAME}/"
+          fi
+          
+      - name: Setup Node.js
+        if: env.REPO_NAME == 'frontend' || env.REPO_NAME == 'backend'
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Setup Flutter
+        if: env.REPO_NAME == 'cross-platform'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.5'
+          channel: 'stable'
+          cache: true
+
+      
+      - name: Execute build script
+        env:
+          COMMIT_TAG: ${{ steps.vars.outputs.sha_short }}
+          ENV_TAG: ${{ steps.vars.outputs.env_tag }}
+          MOVING_TAG: ${{ steps.vars.outputs.moving_tag }}
+        run: |
+          cd devops/${REPO_NAME}
+          chmod +x build.sh
+          bash build.sh
+
+      - name: SonarCloud Scan
+        if: env.REPO_NAME != 'devops'
+        uses: SonarSource/sonarqube-scan-action@v5.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          projectBaseDir: ${{ env.SONAR_BASE_DIR }}
+      
+      - name: Send Discord notification on success
+        if: success()
+        run: |
+          COMMIT_SHA="${{ steps.vars.outputs.sha_short }}"
+          ENV_TAG="${{ steps.vars.outputs.env_tag }}"
+          
+          curl -X POST "${DISCORD_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"embeds\": [{
+                \"title\": \"✅ Build Successful\",
+                \"color\": 3066993,
+                \"fields\": [
+                  {\"name\": \"Repository\", \"value\": \"${REPO_NAME}\", \"inline\": true},
+                  {\"name\": \"Branch\", \"value\": \"${BRANCH}\", \"inline\": true},
+                  {\"name\": \"Commit\", \"value\": \"${COMMIT_SHA}\", \"inline\": true},
+                  {\"name\": \"Environment\", \"value\": \"${ENV_TAG}\", \"inline\": true},
+                  {\"name\": \"Status\", \"value\": \"No errors detected\", \"inline\": false},
+                  {\"name\": \"Quality Gate\", \"value\": \"[View on SonarCloud](https://sonarcloud.io/dashboard?id=${OWNER_NAME}_${REPO_NAME})\", \"inline\": false}
+                ]
+              }]
+            }"
+      
+      - name: Send Discord notification on build failure
+        if: failure() && steps.vars.conclusion == 'success'
+        run: |
+          COMMIT_SHA="${{ steps.vars.outputs.sha_short }}"
+          ENV_TAG="${{ steps.vars.outputs.env_tag }}"
+          
+          curl -X POST "${DISCORD_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"embeds\": [{
+                \"title\": \"❌ Build Failed\",
+                \"color\": 15158332,
+                \"fields\": [
+                  {\"name\": \"Repository\", \"value\": \"${REPO_NAME}\", \"inline\": true},
+                  {\"name\": \"Branch\", \"value\": \"${BRANCH}\", \"inline\": true},
+                  {\"name\": \"Commit\", \"value\": \"${COMMIT_SHA}\", \"inline\": true},
+                  {\"name\": \"Environment\", \"value\": \"${ENV_TAG}\", \"inline\": true},
+                  {\"name\": \"Failed Step\", \"value\": \"Execute build script\", \"inline\": false},
+                  {\"name\": \"Logs\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"inline\": false}
+                ]
+              }]
+            }"
+      
+      - name: Send Discord notification on deployment failure
+        if: failure()
+        run: |
+          COMMIT_SHA="${{ steps.vars.outputs.sha_short }}"
+          ENV_TAG="${{ steps.vars.outputs.env_tag }}"
+          
+          curl -X POST "${DISCORD_WEBHOOK_URL}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"embeds\": [{
+                \"title\": \"❌ Deployment Failed\",
+                \"color\": 15158332,
+                \"fields\": [
+                  {\"name\": \"Repository\", \"value\": \"${REPO_NAME}\", \"inline\": true},
+                  {\"name\": \"Branch\", \"value\": \"${BRANCH}\", \"inline\": true},
+                  {\"name\": \"Commit\", \"value\": \"${COMMIT_SHA}\", \"inline\": true},
+                  {\"name\": \"Environment\", \"value\": \"${ENV_TAG}\", \"inline\": true},
+                  {\"name\": \"Failed Step\", \"value\": \"Execute deployment script\", \"inline\": false},
+                  {\"name\": \"Logs\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"inline\": false}
+                ]
+              }]
+            }"
