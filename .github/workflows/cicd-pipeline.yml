@@ -169,7 +169,7 @@ jobs:
           bash build.sh
 
       - name: SonarCloud Scan
-        if: env.REPO_NAME != 'devops'
+        if: env.REPO_NAME != 'devops' && env.REPO_NAME != 'frontend'
         uses: SonarSource/sonarqube-scan-action@v5.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
